@@ -1,15 +1,6 @@
 import { useState, useEffect } from "react";
 
-const API_BASE = "https://www.thesportsdb.com/api/v1/json/3";
-
-const TEAMS = [
-  { id: "1", name: "Lakers", short: "LAL", color: "#552583", city: "Los Angeles", conf: "West", wins: 45, losses: 27 },
-  { id: "2", name: "Celtics", short: "BOS", color: "#007A33", city: "Boston", conf: "East", wins: 57, losses: 15 },
-  { id: "3", name: "Warriors", short: "GSW", color: "#1D428A", city: "Golden State", conf: "West", wins: 40, losses: 32 },
-  { id: "4", name: "Bulls", short: "CHI", color: "#CE1141", city: "Chicago", conf: "East", wins: 33, losses: 39 },
-  { id: "5", name: "Heat", short: "MIA", color: "#98002E", city: "Miami", conf: "East", wins: 44, losses: 28 },
-  { id: "6", name: "Nets", short: "BKN", color: "#444444", city: "Brooklyn", conf: "East", wins: 29, losses: 43 },
-];
+const ESPN_NBA = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba";
 
 function oddsFromProb(prob: number) {
   if (prob >= 0.5) return -Math.round((prob / (1 - prob)) * 100);
@@ -23,13 +14,35 @@ function calcPayout(stake: number, odds: number) {
   return +(stake * (100 / Math.abs(odds))).toFixed(2);
 }
 
-function generateGames(teams: typeof TEAMS) {
-  const shuffled = [...teams].sort(() => Math.random() - 0.5);
-  return [
-    { id: 1, home: shuffled[0], away: shuffled[1], time: "7:30 PM ET", prediction: null as Prediction | null, status: "upcoming" },
-    { id: 2, home: shuffled[2], away: shuffled[3], time: "8:00 PM ET", prediction: null as Prediction | null, status: "upcoming" },
-    { id: 3, home: shuffled[4], away: shuffled[5], time: "10:00 PM ET", prediction: null as Prediction | null, status: "upcoming" },
-  ];
+function formatGameTime(isoDate: string) {
+  try {
+    return new Date(isoDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+  } catch { return isoDate; }
+}
+
+function parseRecord(summary: string) {
+  const [w, l] = (summary || "0-0").split("-").map(Number);
+  return { wins: w || 0, losses: l || 0 };
+}
+
+interface Team {
+  id: string;
+  name: string;
+  short: string;
+  color: string;
+  city: string;
+  conf: string;
+  wins: number;
+  losses: number;
+}
+
+interface Game {
+  id: number;
+  home: Team;
+  away: Team;
+  time: string;
+  status: string;
+  prediction: Prediction | null;
 }
 
 interface Prediction {
@@ -53,7 +66,8 @@ function PredictionBadge({ prob, label }: { prob: number; label: string }) {
 }
 
 export default function App() {
-  const [games, setGames] = useState(generateGames(TEAMS));
+  const [games, setGames] = useState<Game[]>([]);
+  const [loadingGames, setLoadingGames] = useState(true);
   const [wallet, setWallet] = useState(1000);
   const [bets, setBets] = useState<any[]>([]);
   const [slip, setSlip] = useState<any[]>([]);
@@ -63,20 +77,87 @@ export default function App() {
   const [loadingResults, setLoadingResults] = useState(true);
   const [analyzingId, setAnalyzingId] = useState<number | null>(null);
 
-  useEffect(() => { fetchRecent(); }, []);
+  useEffect(() => {
+    fetchTodaysGames();
+    fetchRecent();
+  }, []);
+
+  async function fetchTodaysGames() {
+    setLoadingGames(true);
+    try {
+      const res = await fetch(`${ESPN_NBA}/scoreboard`);
+      const data = await res.json();
+      const events: Game[] = (data.events || []).map((e: any, idx: number) => {
+        const comp = e.competitions?.[0] || {};
+        const homeTeam = comp.competitors?.find((t: any) => t.homeAway === "home") || {};
+        const awayTeam = comp.competitors?.find((t: any) => t.homeAway === "away") || {};
+
+        const mapTeam = (t: any): Team => {
+          const team = t.team || {};
+          const record = t.records?.find((r: any) => r.name === "overall")?.summary || "0-0";
+          const { wins, losses } = parseRecord(record);
+          return {
+            id: team.id,
+            name: team.name,
+            short: team.abbreviation,
+            color: `#${team.color || "555555"}`,
+            city: team.location,
+            conf: "NBA",
+            wins,
+            losses,
+          };
+        };
+
+        return {
+          id: idx + 1,
+          home: mapTeam(homeTeam),
+          away: mapTeam(awayTeam),
+          time: formatGameTime(e.date),
+          status: e.status?.type?.description || "Scheduled",
+          prediction: null,
+        };
+      });
+      setGames(events);
+    } catch {
+      setGames([]);
+    }
+    setLoadingGames(false);
+  }
 
   async function fetchRecent() {
     setLoadingResults(true);
     try {
-      const res = await fetch(`${API_BASE}/eventsseason.php?id=4387&s=2023-2024`);
+      const res = await fetch(`${ESPN_NBA}/scoreboard?limit=10&dates=${getPastDates()}`);
       const data = await res.json();
-      const events = (data.events || [])
-        .filter((e: any) => e.intHomeScore && e.intAwayScore)
-        .slice(-5)
-        .map((e: any) => ({ id: e.idEvent, home: e.strHomeTeam, away: e.strAwayTeam, homeScore: e.intHomeScore, awayScore: e.intAwayScore, date: e.dateEvent }));
-      setRecentResults(events);
+      const results = (data.events || [])
+        .filter((e: any) => e.status?.type?.completed)
+        .slice(0, 5)
+        .map((e: any) => {
+          const comp = e.competitions?.[0] || {};
+          const home = comp.competitors?.find((t: any) => t.homeAway === "home") || {};
+          const away = comp.competitors?.find((t: any) => t.homeAway === "away") || {};
+          return {
+            id: e.id,
+            home: home.team?.displayName,
+            away: away.team?.displayName,
+            homeScore: home.score,
+            awayScore: away.score,
+            date: e.date?.split("T")[0],
+          };
+        });
+      setRecentResults(results);
     } catch { setRecentResults([]); }
     setLoadingResults(false);
+  }
+
+  function getPastDates() {
+    const dates = [];
+    for (let i = 1; i <= 3; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      dates.push(d.toISOString().split("T")[0].replace(/-/g, ""));
+    }
+    return dates.join(",");
   }
 
   async function analyzeGame(gameId: number) {
@@ -147,7 +228,7 @@ export default function App() {
       <div style={{ background: "#1a1d2e", borderBottom: "1px solid #2a2d3e", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ fontSize: 22, fontWeight: 800, color: "#c084fc" }}>🏀 NBA Bet <span style={{ fontSize: 13, background: "#7c3aed33", color: "#a78bfa", padding: "2px 8px", borderRadius: 20, fontWeight: 600 }}>AI Powered</span></div>
-          <div style={{ fontSize: 12, color: "#6b7280" }}>Simulation · No real money</div>
+          <div style={{ fontSize: 12, color: "#6b7280" }}>Simulation · No real money · Live NBA Schedule</div>
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 12, color: "#9ca3af" }}>Wallet</div>
@@ -170,8 +251,14 @@ export default function App() {
         {/* GAMES TAB */}
         {tab === "games" && (
           <div>
-            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>Tonight's Games · Get AI prediction then bet</div>
-            {games.map(g => {
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>
+              Today's Real NBA Games · {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+            </div>
+            {loadingGames ? (
+              <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>Loading today's games...</div>
+            ) : games.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>No NBA games scheduled today.</div>
+            ) : games.map(g => {
               const homeOdds = g.prediction ? oddsFromProb(g.prediction.homeWinProb) : null;
               const awayOdds = g.prediction ? oddsFromProb(g.prediction.awayWinProb) : null;
               const isAnalyzing = analyzingId === g.id;
@@ -181,17 +268,19 @@ export default function App() {
                 <div key={g.id} style={{ background: "#1a1d2e", borderRadius: 12, marginBottom: 16, overflow: "hidden", border: "1px solid #2a2d3e" }}>
                   <div style={{ padding: "10px 16px", borderBottom: "1px solid #2a2d3e", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span style={{ fontSize: 12, color: "#9ca3af" }}>🕐 {g.time}</span>
-                    {g.prediction && (
+                    {g.prediction ? (
                       <span style={{ fontSize: 11, color: confColor[g.prediction.confidence], background: confColor[g.prediction.confidence] + "22", padding: "2px 8px", borderRadius: 20, fontWeight: 700 }}>
                         {g.prediction.confidence.toUpperCase()} CONFIDENCE
                       </span>
+                    ) : (
+                      <span style={{ fontSize: 11, color: "#4b5563", background: "#1f2937", padding: "2px 8px", borderRadius: 20 }}>{g.status}</span>
                     )}
                   </div>
 
                   <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, padding: 16, alignItems: "center" }}>
                     {([{ team: g.home, side: "home", odds: homeOdds }, { team: g.away, side: "away", odds: awayOdds }] as const).map(({ team, side, odds }) => (
                       <div key={side} style={{ textAlign: "center" }}>
-                        <div style={{ width: 44, height: 44, borderRadius: "50%", background: team.color, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px", fontWeight: 800, fontSize: 13, boxShadow: rec === side ? `0 0 12px ${team.color}` : "none" }}>
+                        <div style={{ width: 44, height: 44, borderRadius: "50%", background: team.color, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px", fontWeight: 800, fontSize: 11, boxShadow: rec === side ? `0 0 12px ${team.color}` : "none" }}>
                           {team.short}
                         </div>
                         <div style={{ fontSize: 14, fontWeight: 600 }}>{team.name}</div>
@@ -235,7 +324,7 @@ export default function App() {
                 </div>
               );
             })}
-            <button onClick={() => setGames(generateGames(TEAMS))} style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px dashed #4b5563", background: "transparent", color: "#9ca3af", cursor: "pointer", fontSize: 14 }}>
+            <button onClick={fetchTodaysGames} style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px dashed #4b5563", background: "transparent", color: "#9ca3af", cursor: "pointer", fontSize: 14 }}>
               🔄 Refresh Games
             </button>
           </div>
@@ -307,11 +396,11 @@ export default function App() {
         {/* RESULTS TAB */}
         {tab === "results" && (
           <div>
-            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>Recent NBA Results (2023-24 Season)</div>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>Recent NBA Results</div>
             {loadingResults ? (
-              <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>Loading real data...</div>
+              <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>Loading recent results...</div>
             ) : recentResults.length === 0 ? (
-              <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>No results found.</div>
+              <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>No recent results found.</div>
             ) : recentResults.map(r => (
               <div key={r.id} style={{ background: "#1a1d2e", borderRadius: 10, padding: 14, marginBottom: 8, border: "1px solid #2a2d3e" }}>
                 <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>{r.date}</div>
