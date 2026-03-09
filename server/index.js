@@ -6,13 +6,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 app.post("/api/analyze", async (req, res) => {
   const { home, away } = req.body;
 
-  if (!ANTHROPIC_API_KEY) {
-    return res.status(500).json({ error: "ANTHROPIC_API_KEY not set" });
+  if (!GEMINI_API_KEY) {
+    return res.status(500).json({ error: "GEMINI_API_KEY not set" });
   }
 
   const prompt = `You are an NBA analyst AI. Analyze this matchup and provide win probabilities.
@@ -33,27 +33,30 @@ Respond ONLY with a valid JSON object, no markdown, no explanation outside JSON:
 }`;
 
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            maxOutputTokens: 2048,
+            temperature: 0.4,
+            thinkingConfig: { thinkingBudget: 0 },
+          },
+        }),
+      }
+    );
 
     const data = await response.json();
-    const text = data.content?.find((b) => b.type === "text")?.text || "";
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    const text = parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("") || "";
     const clean = text.replace(/```json|```/g, "").trim();
     const prediction = JSON.parse(clean);
     res.json(prediction);
   } catch (e) {
-    console.error("Anthropic error:", e);
+    console.error("Gemini error:", e);
     res.status(500).json({ error: "Failed to get AI prediction" });
   }
 });
