@@ -45,7 +45,9 @@ Respond ONLY with a valid JSON object, no markdown, no explanation outside JSON:
   "reasoning": "<2-3 sentences of analysis covering stats and injuries>"
 }`;
 
-  try {
+  const MAX_RETRIES = 3;
+
+  async function callGemini(retryCount = 0) {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
@@ -63,18 +65,29 @@ Respond ONLY with a valid JSON object, no markdown, no explanation outside JSON:
     );
 
     const data = await response.json();
-    console.log("Gemini status:", response.status);
-    console.log("Gemini full:", JSON.stringify(data).slice(0, 1000));
-    if (!response.ok) {
-      return res.status(500).json({ error: "Gemini API error", detail: data?.error?.message || JSON.stringify(data) });
+
+    if (response.status === 429 && retryCount < MAX_RETRIES) {
+      const retryAfter = data?.error?.details?.find(d => d.retryDelay)?.retryDelay;
+      const waitMs = retryAfter ? parseInt(retryAfter) * 1000 : (retryCount + 1) * 10000;
+      console.log(`Rate limited. Retrying in ${waitMs}ms (attempt ${retryCount + 1})`);
+      await new Promise(r => setTimeout(r, waitMs));
+      return callGemini(retryCount + 1);
     }
+
+    if (!response.ok) {
+      throw new Error(data?.error?.message || `Gemini error ${response.status}`);
+    }
+
     const parts = data.candidates?.[0]?.content?.parts || [];
-    // Try non-thought parts first, fall back to all text parts
     let text = parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("");
     if (!text) text = parts.filter((p) => p.text).map((p) => p.text).join("");
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON found in response: " + text.slice(0, 200));
-    const prediction = JSON.parse(jsonMatch[0]);
+    if (!jsonMatch) throw new Error("No JSON in response: " + text.slice(0, 200));
+    return JSON.parse(jsonMatch[0]);
+  }
+
+  try {
+    const prediction = await callGemini();
     res.json(prediction);
   } catch (e) {
     console.error("Gemini error:", e);
