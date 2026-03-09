@@ -70,6 +70,6 @@ Respond ONLY with a valid JSON object, no markdown, no explanation outside JSON:
     res.json(prediction);
   } catch (e) {
     console.error("Gemini error:", e);
-    res.status(500).json({ error: "Failed to get AI prediction" });
+    res.status(500).json({ error: "Failed to get AI prediction", detail: String(e) });
   }
 }
