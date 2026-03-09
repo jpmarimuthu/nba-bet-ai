@@ -63,7 +63,7 @@ Respond ONLY with a valid JSON object, no markdown, no explanation outside JSON:
     );
 
     const data = await response.json();
-    console.log("Gemini raw:", JSON.stringify(data).slice(0, 500));
+    console.log("Gemini full:", JSON.stringify(data).slice(0, 1000));
     const parts = data.candidates?.[0]?.content?.parts || [];
     // Try non-thought parts first, fall back to all text parts
     let text = parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("");
