@@ -10,21 +10,39 @@ export default async function handler(req, res) {
 
   const { home, away } = req.body;
 
-  const prompt = `You are an NBA analyst AI. Analyze this matchup and provide win probabilities.
+  const homeInjuries = (home.injuries || []).length > 0
+    ? home.injuries.join("; ")
+    : "None reported";
+  const awayInjuries = (away.injuries || []).length > 0
+    ? away.injuries.join("; ")
+    : "None reported";
 
-Home Team: ${home.name} (${home.city}) - Record: ${home.wins}W-${home.losses}L, Conference: ${home.conf}
-Away Team: ${away.name} (${away.city}) - Record: ${away.wins}W-${away.losses}L, Conference: ${away.conf}
+  const prompt = `You are an expert NBA analyst. Analyze this matchup using the stats below and return win probabilities.
 
-Consider: win/loss records, home court advantage (~60% historical edge), conference strength, and team quality.
+HOME: ${home.name} (${home.city})
+- Season record: ${home.wins}W-${home.losses}L
+- Home record: ${home.homeWins}W-${home.homeLosses}L
+- Avg points/game: ${home.ppg || "N/A"}
+- Field goal %: ${home.fgPct || "N/A"}%
+- Injuries: ${homeInjuries}
+
+AWAY: ${away.name} (${away.city})
+- Season record: ${away.wins}W-${away.losses}L
+- Road record: ${away.roadWins}W-${away.roadLosses}L
+- Avg points/game: ${away.ppg || "N/A"}
+- Field goal %: ${away.fgPct || "N/A"}%
+- Injuries: ${awayInjuries}
+
+Factors to weigh: home court advantage, home/road splits, scoring efficiency, injury impact on key players.
 
 Respond ONLY with a valid JSON object, no markdown, no explanation outside JSON:
 {
   "homeWinProb": <number between 0 and 1>,
   "awayWinProb": <number between 0 and 1>,
   "confidence": <"low"|"medium"|"high">,
-  "keyFactor": "<one sentence max explaining the main deciding factor>",
+  "keyFactor": "<one sentence explaining the single biggest deciding factor>",
   "recommendedBet": <"home"|"away"|"skip">,
-  "reasoning": "<2-3 sentences of analysis>"
+  "reasoning": "<2-3 sentences of analysis covering stats and injuries>"
 }`;
 
   try {

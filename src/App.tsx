@@ -42,6 +42,13 @@ interface Team {
   conf: string;
   wins: number;
   losses: number;
+  homeWins?: number;
+  homeLosses?: number;
+  roadWins?: number;
+  roadLosses?: number;
+  ppg?: string;
+  fgPct?: string;
+  injuries?: string[];
 }
 
 interface Game {
@@ -90,20 +97,45 @@ export default function App() {
     fetchRecent();
   }, []);
 
+  async function fetchInjuries(): Promise<Record<string, string[]>> {
+    try {
+      const res = await fetch(`${ESPN_NBA}/injuries`);
+      const data = await res.json();
+      const map: Record<string, string[]> = {};
+      for (const team of (data.injuries || [])) {
+        const key = team.displayName;
+        map[key] = (team.injuries || [])
+          .filter((i: any) => i.status === "Out" || i.status === "Day-To-Day")
+          .map((i: any) => `${i.athlete?.shortName} (${i.status}: ${i.shortComment?.slice(0, 60) || ""})`);
+      }
+      return map;
+    } catch { return {}; }
+  }
+
   async function fetchTodaysGames() {
     setLoadingGames(true);
     try {
-      const res = await fetch(`${ESPN_NBA}/scoreboard`);
-      const data = await res.json();
-      const events: Game[] = (data.events || []).map((e: any, idx: number) => {
+      const [scoreRes, injuryMap] = await Promise.all([
+        fetch(`${ESPN_NBA}/scoreboard`).then(r => r.json()),
+        fetchInjuries(),
+      ]);
+
+      const events: Game[] = (scoreRes.events || []).map((e: any, idx: number) => {
         const comp = e.competitions?.[0] || {};
         const homeTeam = comp.competitors?.find((t: any) => t.homeAway === "home") || {};
         const awayTeam = comp.competitors?.find((t: any) => t.homeAway === "away") || {};
 
         const mapTeam = (t: any): Team => {
           const team = t.team || {};
-          const record = t.records?.find((r: any) => r.name === "overall")?.summary || "0-0";
-          const { wins, losses } = parseRecord(record);
+          const overall = t.records?.find((r: any) => r.name === "overall")?.summary || "0-0";
+          const home = t.records?.find((r: any) => r.name === "Home")?.summary || "0-0";
+          const road = t.records?.find((r: any) => r.name === "Road")?.summary || "0-0";
+          const { wins, losses } = parseRecord(overall);
+          const { wins: hw, losses: hl } = parseRecord(home);
+          const { wins: rw, losses: rl } = parseRecord(road);
+          const stats = t.statistics || [];
+          const ppg = stats.find((s: any) => s.name === "avgPoints")?.displayValue;
+          const fgPct = stats.find((s: any) => s.name === "fieldGoalPct")?.displayValue;
           return {
             id: team.id,
             name: team.name,
@@ -111,8 +143,11 @@ export default function App() {
             color: `#${team.color || "555555"}`,
             city: team.location,
             conf: "NBA",
-            wins,
-            losses,
+            wins, losses,
+            homeWins: hw, homeLosses: hl,
+            roadWins: rw, roadLosses: rl,
+            ppg, fgPct,
+            injuries: injuryMap[team.displayName] || [],
           };
         };
 
@@ -178,8 +213,20 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          home: { name: game.home.name, city: game.home.city, wins: game.home.wins, losses: game.home.losses, conf: game.home.conf },
-          away: { name: game.away.name, city: game.away.city, wins: game.away.wins, losses: game.away.losses, conf: game.away.conf },
+          home: {
+            name: game.home.name, city: game.home.city,
+            wins: game.home.wins, losses: game.home.losses,
+            homeWins: game.home.homeWins, homeLosses: game.home.homeLosses,
+            ppg: game.home.ppg, fgPct: game.home.fgPct,
+            injuries: game.home.injuries,
+          },
+          away: {
+            name: game.away.name, city: game.away.city,
+            wins: game.away.wins, losses: game.away.losses,
+            roadWins: game.away.roadWins, roadLosses: game.away.roadLosses,
+            ppg: game.away.ppg, fgPct: game.away.fgPct,
+            injuries: game.away.injuries,
+          },
         }),
       });
       const prediction: Prediction = await res.json();
