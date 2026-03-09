@@ -91,6 +91,7 @@ export default function App() {
   const [recentResults, setRecentResults] = useState<any[]>([]);
   const [loadingResults, setLoadingResults] = useState(true);
   const [analyzingId, setAnalyzingId] = useState<number | null>(null);
+  const [rateLimitedId, setRateLimitedId] = useState<number | null>(null);
 
   useEffect(() => {
     fetchTodaysGames();
@@ -229,8 +230,13 @@ export default function App() {
           },
         }),
       });
-      const prediction: Prediction = await res.json();
-      setGames(prev => prev.map(g => g.id === gameId ? { ...g, prediction } : g));
+      if (res.status === 429) {
+        setRateLimitedId(gameId);
+        setTimeout(() => setRateLimitedId(null), 60000);
+      } else {
+        const prediction: Prediction = await res.json();
+        setGames(prev => prev.map(g => g.id === gameId ? { ...g, prediction } : g));
+      }
     } catch (e) {
       console.error("AI error", e);
     }
@@ -368,9 +374,9 @@ export default function App() {
                   )}
 
                   <div style={{ padding: "0 16px 14px" }}>
-                    <button onClick={() => analyzeGame(g.id)} disabled={isAnalyzing}
-                      style={{ width: "100%", padding: "10px", borderRadius: 8, border: "none", background: g.prediction ? "#2a2d3e" : "linear-gradient(135deg, #7c3aed, #4f46e5)", color: "#fff", fontWeight: 600, cursor: isAnalyzing ? "wait" : "pointer", fontSize: 13, opacity: isAnalyzing ? 0.7 : 1 }}>
-                      {isAnalyzing ? "🤖 Analyzing matchup..." : g.prediction ? "🔄 Re-analyze with AI" : "🤖 Get AI Prediction"}
+                    <button onClick={() => analyzeGame(g.id)} disabled={isAnalyzing || rateLimitedId === g.id}
+                      style={{ width: "100%", padding: "10px", borderRadius: 8, border: "none", background: rateLimitedId === g.id ? "#78350f" : g.prediction ? "#2a2d3e" : "linear-gradient(135deg, #7c3aed, #4f46e5)", color: "#fff", fontWeight: 600, cursor: isAnalyzing ? "wait" : "pointer", fontSize: 13, opacity: isAnalyzing ? 0.7 : 1 }}>
+                      {isAnalyzing ? "🤖 Analyzing matchup..." : rateLimitedId === g.id ? "⏳ Rate limited — try again in 1 min" : g.prediction ? "🔄 Re-analyze with AI" : "🤖 Get AI Prediction"}
                     </button>
                   </div>
                 </div>

@@ -45,9 +45,7 @@ Respond ONLY with a valid JSON object, no markdown, no explanation outside JSON:
   "reasoning": "<2-3 sentences of analysis covering stats and injuries>"
 }`;
 
-  const MAX_RETRIES = 3;
-
-  async function callGemini(retryCount = 0) {
+  try {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
@@ -66,12 +64,8 @@ Respond ONLY with a valid JSON object, no markdown, no explanation outside JSON:
 
     const data = await response.json();
 
-    if (response.status === 429 && retryCount < MAX_RETRIES) {
-      const retryAfter = data?.error?.details?.find(d => d.retryDelay)?.retryDelay;
-      const waitMs = retryAfter ? parseInt(retryAfter) * 1000 : (retryCount + 1) * 10000;
-      console.log(`Rate limited. Retrying in ${waitMs}ms (attempt ${retryCount + 1})`);
-      await new Promise(r => setTimeout(r, waitMs));
-      return callGemini(retryCount + 1);
+    if (response.status === 429) {
+      return res.status(429).json({ error: "rate_limited", message: "AI is busy — please try again in a minute." });
     }
 
     if (!response.ok) {
@@ -83,12 +77,7 @@ Respond ONLY with a valid JSON object, no markdown, no explanation outside JSON:
     if (!text) text = parts.filter((p) => p.text).map((p) => p.text).join("");
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("No JSON in response: " + text.slice(0, 200));
-    return JSON.parse(jsonMatch[0]);
-  }
-
-  try {
-    const prediction = await callGemini();
-    res.json(prediction);
+    res.json(JSON.parse(jsonMatch[0]));
   } catch (e) {
     console.error("Gemini error:", e);
     res.status(500).json({ error: "Failed to get AI prediction", detail: String(e) });
