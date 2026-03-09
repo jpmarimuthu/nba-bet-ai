@@ -63,10 +63,14 @@ Respond ONLY with a valid JSON object, no markdown, no explanation outside JSON:
     );
 
     const data = await response.json();
+    console.log("Gemini raw:", JSON.stringify(data).slice(0, 500));
     const parts = data.candidates?.[0]?.content?.parts || [];
-    const text = parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("") || "";
-    const clean = text.replace(/```json|```/g, "").trim();
-    const prediction = JSON.parse(clean);
+    // Try non-thought parts first, fall back to all text parts
+    let text = parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("");
+    if (!text) text = parts.filter((p) => p.text).map((p) => p.text).join("");
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON found in response: " + text.slice(0, 200));
+    const prediction = JSON.parse(jsonMatch[0]);
     res.json(prediction);
   } catch (e) {
     console.error("Gemini error:", e);
