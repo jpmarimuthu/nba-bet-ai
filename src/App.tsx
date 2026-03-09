@@ -7,6 +7,14 @@ function oddsFromProb(prob: number) {
   return +Math.round(((1 - prob) / prob) * 100);
 }
 
+function defaultOdds(home: Team, away: Team) {
+  const totalGames = home.wins + home.losses + away.wins + away.losses;
+  if (totalGames === 0) return { homeOdds: -110, awayOdds: -110 };
+  const homeWinRate = home.wins / (home.wins + home.losses || 1);
+  const homeProb = Math.min(0.85, Math.max(0.15, homeWinRate * 0.5 + 0.3));
+  return { homeOdds: oddsFromProb(homeProb), awayOdds: oddsFromProb(1 - homeProb) };
+}
+
 function oddsLabel(o: number) { return o > 0 ? `+${o}` : `${o}`; }
 
 function calcPayout(stake: number, odds: number) {
@@ -259,8 +267,9 @@ export default function App() {
             ) : games.length === 0 ? (
               <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>No NBA games scheduled today.</div>
             ) : games.map(g => {
-              const homeOdds = g.prediction ? oddsFromProb(g.prediction.homeWinProb) : null;
-              const awayOdds = g.prediction ? oddsFromProb(g.prediction.awayWinProb) : null;
+              const base = defaultOdds(g.home, g.away);
+              const homeOdds = g.prediction ? oddsFromProb(g.prediction.homeWinProb) : base.homeOdds;
+              const awayOdds = g.prediction ? oddsFromProb(g.prediction.awayWinProb) : base.awayOdds;
               const isAnalyzing = analyzingId === g.id;
               const rec = g.prediction?.recommendedBet;
 
@@ -286,14 +295,10 @@ export default function App() {
                         <div style={{ fontSize: 14, fontWeight: 600 }}>{team.name}</div>
                         <div style={{ fontSize: 11, color: "#9ca3af" }}>{team.wins}W-{team.losses}L</div>
                         {rec === side && <div style={{ fontSize: 10, color: "#4ade80", fontWeight: 700, marginTop: 2 }}>⭐ AI PICK</div>}
-                        {odds !== null ? (
-                          <button onClick={() => togglePick(g.id, side, odds, `${team.name} ML`)}
-                            style={{ marginTop: 8, padding: "6px 14px", borderRadius: 8, border: "none", background: slip.find(s => s.key === `${g.id}-${side}`) ? "#7c3aed" : "#2a2d3e", color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 14 }}>
-                            {oddsLabel(odds)}
-                          </button>
-                        ) : (
-                          <div style={{ marginTop: 8, padding: "6px 14px", fontSize: 12, color: "#4b5563" }}>—</div>
-                        )}
+                        <button onClick={() => togglePick(g.id, side, odds, `${team.name} ML`)}
+                          style={{ marginTop: 8, padding: "6px 14px", borderRadius: 8, border: "none", background: slip.find(s => s.key === `${g.id}-${side}`) ? "#7c3aed" : "#2a2d3e", color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 14 }}>
+                          {oddsLabel(odds)}
+                        </button>
                       </div>
                     ))}
                     <div style={{ textAlign: "center", color: "#6b7280", fontWeight: 800 }}>VS</div>
