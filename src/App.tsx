@@ -116,8 +116,9 @@ export default function App() {
   async function fetchTodaysGames() {
     setLoadingGames(true);
     try {
+      const today = new Date().toISOString().split("T")[0].replace(/-/g, "");
       const [scoreRes, injuryMap] = await Promise.all([
-        fetch(`${ESPN_NBA}/scoreboard`).then(r => r.json()),
+        fetch(`${ESPN_NBA}/scoreboard?dates=${today}`).then(r => r.json()),
         fetchInjuries(),
       ]);
 
