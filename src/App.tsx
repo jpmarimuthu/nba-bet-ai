@@ -188,8 +188,9 @@ export default function App() {
   async function fetchPastGames() {
     setLoadingPast(true);
     try {
-      const dates = [1, 2, 3, 4, 5, 6, 7].map(i => getLocalDateStr(i)).join(",");
-      const res = await fetch(`${ESPN_NBA}/scoreboard?dates=${dates}`);
+      const startDate = getLocalDateStr(7);
+      const endDate = getLocalDateStr(1);
+      const res = await fetch(`${ESPN_NBA}/scoreboard?dates=${startDate}-${endDate}`);
       const data = await res.json();
 
       const completed: PastGame[] = (data.events || [])
