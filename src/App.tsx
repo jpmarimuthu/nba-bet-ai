@@ -28,6 +28,12 @@ function formatGameTime(isoDate: string) {
   } catch { return isoDate; }
 }
 
+function formatDate(isoDate: string) {
+  try {
+    return new Date(isoDate).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  } catch { return isoDate; }
+}
+
 function parseRecord(summary: string) {
   const [w, l] = (summary || "0-0").split("-").map(Number);
   return { wins: w || 0, losses: l || 0 };
@@ -60,6 +66,19 @@ interface Game {
   prediction: Prediction | null;
 }
 
+interface PastGame {
+  id: string;
+  date: string;
+  home: Team;
+  away: Team;
+  homeScore: number;
+  awayScore: number;
+  winner: "home" | "away";
+  prediction: Prediction | null;
+  predicting: boolean;
+  rateLimited: boolean;
+}
+
 interface Prediction {
   homeWinProb: number;
   awayWinProb: number;
@@ -88,14 +107,14 @@ export default function App() {
   const [slip, setSlip] = useState<any[]>([]);
   const [stakes, setStakes] = useState<Record<string, string>>({});
   const [tab, setTab] = useState("games");
-  const [recentResults, setRecentResults] = useState<any[]>([]);
-  const [loadingResults, setLoadingResults] = useState(true);
+  const [pastGames, setPastGames] = useState<PastGame[]>([]);
+  const [loadingPast, setLoadingPast] = useState(true);
   const [analyzingId, setAnalyzingId] = useState<number | null>(null);
   const [rateLimitedId, setRateLimitedId] = useState<number | null>(null);
 
   useEffect(() => {
     fetchTodaysGames();
-    fetchRecent();
+    fetchPastGames();
   }, []);
 
   async function fetchInjuries(): Promise<Record<string, string[]>> {
@@ -113,11 +132,16 @@ export default function App() {
     } catch { return {}; }
   }
 
+  function getLocalDateStr(daysAgo = 0) {
+    const d = new Date();
+    d.setDate(d.getDate() - daysAgo);
+    return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+  }
+
   async function fetchTodaysGames() {
     setLoadingGames(true);
     try {
-      const now = new Date();
-      const today = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+      const today = getLocalDateStr(0);
       const [scoreRes, injuryMap] = await Promise.all([
         fetch(`${ESPN_NBA}/scoreboard?dates=${today}`).then(r => r.json()),
         fetchInjuries(),
@@ -140,17 +164,10 @@ export default function App() {
           const ppg = stats.find((s: any) => s.name === "avgPoints")?.displayValue;
           const fgPct = stats.find((s: any) => s.name === "fieldGoalPct")?.displayValue;
           return {
-            id: team.id,
-            name: team.name,
-            short: team.abbreviation,
-            color: `#${team.color || "555555"}`,
-            city: team.location,
-            conf: "NBA",
-            wins, losses,
-            homeWins: hw, homeLosses: hl,
-            roadWins: rw, roadLosses: rl,
-            ppg, fgPct,
-            injuries: injuryMap[team.displayName] || [],
+            id: team.id, name: team.name, short: team.abbreviation,
+            color: `#${team.color || "555555"}`, city: team.location, conf: "NBA",
+            wins, losses, homeWins: hw, homeLosses: hl, roadWins: rw, roadLosses: rl,
+            ppg, fgPct, injuries: injuryMap[team.displayName] || [],
           };
         };
 
@@ -164,53 +181,112 @@ export default function App() {
         };
       });
       setGames(events);
-    } catch {
-      setGames([]);
-    }
+    } catch { setGames([]); }
     setLoadingGames(false);
   }
 
-  async function fetchRecent() {
-    setLoadingResults(true);
+  async function fetchPastGames() {
+    setLoadingPast(true);
     try {
-      const res = await fetch(`${ESPN_NBA}/scoreboard?limit=10&dates=${getPastDates()}`);
+      const dates = [1, 2, 3, 4, 5, 6, 7].map(i => getLocalDateStr(i)).join(",");
+      const res = await fetch(`${ESPN_NBA}/scoreboard?dates=${dates}`);
       const data = await res.json();
-      const results = (data.events || [])
+
+      const completed: PastGame[] = (data.events || [])
         .filter((e: any) => e.status?.type?.completed)
-        .slice(0, 5)
         .map((e: any) => {
           const comp = e.competitions?.[0] || {};
-          const home = comp.competitors?.find((t: any) => t.homeAway === "home") || {};
-          const away = comp.competitors?.find((t: any) => t.homeAway === "away") || {};
+          const homeTeam = comp.competitors?.find((t: any) => t.homeAway === "home") || {};
+          const awayTeam = comp.competitors?.find((t: any) => t.homeAway === "away") || {};
+
+          const mapTeam = (t: any): Team => {
+            const team = t.team || {};
+            const overall = t.records?.find((r: any) => r.name === "overall")?.summary || "0-0";
+            const home = t.records?.find((r: any) => r.name === "Home")?.summary || "0-0";
+            const road = t.records?.find((r: any) => r.name === "Road")?.summary || "0-0";
+            const { wins, losses } = parseRecord(overall);
+            const { wins: hw, losses: hl } = parseRecord(home);
+            const { wins: rw, losses: rl } = parseRecord(road);
+            const stats = t.statistics || [];
+            return {
+              id: team.id, name: team.name, short: team.abbreviation,
+              color: `#${team.color || "555555"}`, city: team.location, conf: "NBA",
+              wins, losses, homeWins: hw, homeLosses: hl, roadWins: rw, roadLosses: rl,
+              ppg: stats.find((s: any) => s.name === "avgPoints")?.displayValue,
+              fgPct: stats.find((s: any) => s.name === "fieldGoalPct")?.displayValue,
+              injuries: [],
+            };
+          };
+
+          const homeScore = parseInt(homeTeam.score || "0");
+          const awayScore = parseInt(awayTeam.score || "0");
+
           return {
             id: e.id,
-            home: home.team?.displayName,
-            away: away.team?.displayName,
-            homeScore: home.score,
-            awayScore: away.score,
-            date: e.date?.split("T")[0],
-          };
-        });
-      setRecentResults(results);
-    } catch { setRecentResults([]); }
-    setLoadingResults(false);
+            date: e.date,
+            home: mapTeam(homeTeam),
+            away: mapTeam(awayTeam),
+            homeScore,
+            awayScore,
+            winner: homeScore > awayScore ? "home" : "away",
+            prediction: null,
+            predicting: false,
+            rateLimited: false,
+          } as PastGame;
+        })
+        .sort((a: PastGame, b: PastGame) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .slice(0, 20);
+
+      setPastGames(completed);
+    } catch { setPastGames([]); }
+    setLoadingPast(false);
   }
 
-  function getPastDates() {
-    const dates = [];
-    for (let i = 1; i <= 3; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      dates.push(d.toISOString().split("T")[0].replace(/-/g, ""));
+  async function analyzePastGame(gameId: string) {
+    const game = pastGames.find(g => g.id === gameId);
+    if (!game) return;
+
+    setPastGames(prev => prev.map(g => g.id === gameId ? { ...g, predicting: true } : g));
+
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          home: {
+            name: game.home.name, city: game.home.city,
+            wins: game.home.wins, losses: game.home.losses,
+            homeWins: game.home.homeWins, homeLosses: game.home.homeLosses,
+            ppg: game.home.ppg, fgPct: game.home.fgPct,
+            injuries: [],
+          },
+          away: {
+            name: game.away.name, city: game.away.city,
+            wins: game.away.wins, losses: game.away.losses,
+            roadWins: game.away.roadWins, roadLosses: game.away.roadLosses,
+            ppg: game.away.ppg, fgPct: game.away.fgPct,
+            injuries: [],
+          },
+        }),
+      });
+
+      if (res.status === 429) {
+        setPastGames(prev => prev.map(g => g.id === gameId ? { ...g, predicting: false, rateLimited: true } : g));
+        setTimeout(() => setPastGames(prev => prev.map(g => g.id === gameId ? { ...g, rateLimited: false } : g)), 60000);
+      } else {
+        const prediction: Prediction = await res.json();
+        setPastGames(prev => prev.map(g => g.id === gameId ? { ...g, prediction, predicting: false } : g));
+      }
+    } catch (e) {
+      console.error("AI error", e);
+      setPastGames(prev => prev.map(g => g.id === gameId ? { ...g, predicting: false } : g));
     }
-    return dates.join(",");
   }
 
   async function analyzeGame(gameId: number) {
     const game = games.find(g => g.id === gameId);
     if (!game) return;
     setAnalyzingId(gameId);
-
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
@@ -239,9 +315,7 @@ export default function App() {
         const prediction: Prediction = await res.json();
         setGames(prev => prev.map(g => g.id === gameId ? { ...g, prediction } : g));
       }
-    } catch (e) {
-      console.error("AI error", e);
-    }
+    } catch (e) { console.error("AI error", e); }
     setAnalyzingId(null);
   }
 
@@ -272,8 +346,7 @@ export default function App() {
   function simulateResults() {
     const updated = bets.map(b => {
       if (b.status !== "pending") return b;
-      const win = Math.random() > 0.5;
-      return { ...b, status: win ? "won" : "lost" };
+      return { ...b, status: Math.random() > 0.5 ? "won" : "lost" };
     });
     const winnings = updated
       .filter(b => b.status === "won" && bets.find((o: any) => o.id === b.id)?.status === "pending")
@@ -281,6 +354,15 @@ export default function App() {
     setWallet(+(wallet + winnings).toFixed(2));
     setBets(updated);
   }
+
+  // Accuracy calculation
+  const analyzedPastGames = pastGames.filter(g => g.prediction && g.prediction.recommendedBet !== "skip");
+  const correctPredictions = analyzedPastGames.filter(g =>
+    g.prediction && g.prediction.recommendedBet === g.winner
+  ).length;
+  const accuracy = analyzedPastGames.length > 0
+    ? Math.round((correctPredictions / analyzedPastGames.length) * 100)
+    : null;
 
   const pendingCount = bets.filter(b => b.status === "pending").length;
   const confColor: Record<string, string> = { low: "#f87171", medium: "#facc15", high: "#4ade80" };
@@ -301,10 +383,10 @@ export default function App() {
 
       {/* Tabs */}
       <div style={{ display: "flex", borderBottom: "1px solid #2a2d3e", background: "#1a1d2e" }}>
-        {["games", "slip", "history", "results"].map(t => (
+        {["games", "slip", "history", "compare"].map(t => (
           <button key={t} onClick={() => setTab(t)}
             style={{ flex: 1, padding: "12px", border: "none", background: "transparent", color: tab === t ? "#c084fc" : "#6b7280", fontWeight: tab === t ? 700 : 400, borderBottom: tab === t ? "2px solid #c084fc" : "2px solid transparent", cursor: "pointer", textTransform: "capitalize", fontSize: 14 }}>
-            {t === "slip" ? `Slip (${slip.length})` : t === "history" ? `Bets (${bets.length})` : t}
+            {t === "slip" ? `Slip (${slip.length})` : t === "history" ? `Bets (${bets.length})` : t === "compare" ? `Compare${accuracy !== null ? ` (${accuracy}%)` : ""}` : t}
           </button>
         ))}
       </div>
@@ -369,9 +451,7 @@ export default function App() {
                       <div style={{ fontSize: 12, color: "#a78bfa", marginBottom: 6 }}>
                         🔑 <b>Key Factor:</b> {g.prediction.keyFactor}
                       </div>
-                      <div style={{ fontSize: 12, color: "#9ca3af", lineHeight: 1.6 }}>
-                        {g.prediction.reasoning}
-                      </div>
+                      <div style={{ fontSize: 12, color: "#9ca3af", lineHeight: 1.6 }}>{g.prediction.reasoning}</div>
                     </div>
                   )}
 
@@ -453,24 +533,97 @@ export default function App() {
           </div>
         )}
 
-        {/* RESULTS TAB */}
-        {tab === "results" && (
+        {/* COMPARE TAB */}
+        {tab === "compare" && (
           <div>
-            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>Recent NBA Results</div>
-            {loadingResults ? (
-              <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>Loading recent results...</div>
-            ) : recentResults.length === 0 ? (
-              <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>No recent results found.</div>
-            ) : recentResults.map(r => (
-              <div key={r.id} style={{ background: "#1a1d2e", borderRadius: 10, padding: 14, marginBottom: 8, border: "1px solid #2a2d3e" }}>
-                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>{r.date}</div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{r.home}</span>
-                  <span style={{ fontWeight: 800, fontSize: 18, color: "#c084fc" }}>{r.homeScore} – {r.awayScore}</span>
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{r.away}</span>
+            {/* Accuracy Banner */}
+            {accuracy !== null && (
+              <div style={{ background: "#1a1d2e", borderRadius: 12, padding: 16, marginBottom: 16, border: "1px solid #2a2d3e", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 12, color: "#9ca3af" }}>AI Accuracy (last 7 days)</div>
+                  <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{correctPredictions} correct out of {analyzedPastGames.length} analyzed</div>
+                </div>
+                <div style={{ fontSize: 36, fontWeight: 800, color: accuracy >= 60 ? "#4ade80" : accuracy >= 50 ? "#facc15" : "#f87171" }}>
+                  {accuracy}%
                 </div>
               </div>
-            ))}
+            )}
+
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>
+              Past 7 Days · Click "Analyze" to see what AI would have predicted
+            </div>
+
+            {loadingPast ? (
+              <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>Loading past games...</div>
+            ) : pastGames.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>No recent completed games found.</div>
+            ) : pastGames.map(g => {
+              const aiPick = g.prediction?.recommendedBet;
+              const isCorrect = aiPick && aiPick !== "skip" && aiPick === g.winner;
+              const isWrong = aiPick && aiPick !== "skip" && aiPick !== g.winner;
+              const actualWinner = g.winner === "home" ? g.home : g.away;
+
+              return (
+                <div key={g.id} style={{ background: "#1a1d2e", borderRadius: 12, marginBottom: 12, overflow: "hidden", border: `1px solid ${isCorrect ? "#4ade8044" : isWrong ? "#f8717144" : "#2a2d3e"}` }}>
+                  {/* Date + result badge */}
+                  <div style={{ padding: "10px 16px", borderBottom: "1px solid #2a2d3e", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 12, color: "#9ca3af" }}>{formatDate(g.date)}</span>
+                    {isCorrect && <span style={{ fontSize: 12, color: "#4ade80", fontWeight: 700 }}>✅ AI Correct</span>}
+                    {isWrong && <span style={{ fontSize: 12, color: "#f87171", fontWeight: 700 }}>❌ AI Wrong</span>}
+                    {!aiPick && <span style={{ fontSize: 11, color: "#6b7280" }}>Not analyzed yet</span>}
+                  </div>
+
+                  {/* Teams + score */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, padding: 16, alignItems: "center" }}>
+                    {[{ team: g.home, side: "home" as const, score: g.homeScore }, { team: g.away, side: "away" as const, score: g.awayScore }].map(({ team, side, score }) => (
+                      <div key={side} style={{ textAlign: "center" }}>
+                        <div style={{ width: 40, height: 40, borderRadius: "50%", background: team.color, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px", fontWeight: 800, fontSize: 11, boxShadow: g.winner === side ? `0 0 10px ${team.color}` : "none" }}>
+                          {team.short}
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{team.name}</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: g.winner === side ? "#fff" : "#6b7280", marginTop: 4 }}>{score}</div>
+                        {g.winner === side && <div style={{ fontSize: 10, color: "#4ade80", fontWeight: 700 }}>WINNER</div>}
+                        {aiPick === side && (
+                          <div style={{ fontSize: 10, color: "#a78bfa", fontWeight: 700, marginTop: 2 }}>🤖 AI PICK</div>
+                        )}
+                      </div>
+                    ))}
+                    <div style={{ textAlign: "center", color: "#6b7280", fontWeight: 800 }}>FINAL</div>
+                  </div>
+
+                  {/* AI prediction details */}
+                  {g.prediction && (
+                    <div style={{ margin: "0 16px 12px", background: "#0f1117", borderRadius: 10, padding: 12, border: `1px solid ${isCorrect ? "#4ade8033" : "#f8717133"}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-around", marginBottom: 10 }}>
+                        <PredictionBadge prob={g.prediction.homeWinProb} label={`${g.home.name} Win%`} />
+                        <div style={{ width: 1, background: "#2a2d3e" }} />
+                        <PredictionBadge prob={g.prediction.awayWinProb} label={`${g.away.name} Win%`} />
+                      </div>
+                      <div style={{ fontSize: 12, color: "#a78bfa", marginBottom: 4 }}>
+                        🔑 <b>Key Factor:</b> {g.prediction.keyFactor}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6, paddingTop: 6, borderTop: "1px solid #2a2d3e" }}>
+                        <b style={{ color: isCorrect ? "#4ade80" : "#f87171" }}>
+                          {isCorrect ? "✅ AI picked " : "❌ AI picked "}
+                          {aiPick === "home" ? g.home.name : g.away.name}
+                        </b>
+                        {" · "}Actual winner: <b style={{ color: "#fff" }}>{actualWinner.name}</b>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Analyze button */}
+                  <div style={{ padding: "0 16px 12px" }}>
+                    <button
+                      onClick={() => analyzePastGame(g.id)}
+                      disabled={g.predicting || g.rateLimited}
+                      style={{ width: "100%", padding: "8px", borderRadius: 8, border: "none", background: g.rateLimited ? "#78350f" : g.prediction ? "#2a2d3e" : "linear-gradient(135deg, #7c3aed, #4f46e5)", color: "#fff", fontWeight: 600, cursor: g.predicting ? "wait" : "pointer", fontSize: 13, opacity: g.predicting ? 0.7 : 1 }}>
+                      {g.predicting ? "🤖 Analyzing..." : g.rateLimited ? "⏳ Rate limited — try again in 1 min" : g.prediction ? "🔄 Re-analyze" : "🤖 Analyze with AI"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
